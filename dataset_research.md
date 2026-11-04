@@ -3,8 +3,9 @@
 ## 1. Dataset Overview
 - **Dataset name**: `masakhanews_fr` (Francophone version of MasakhaNEWS)
 - **Source**: Hugging Face `masakhane/masakhanews` (dataset_id: `masakhane/masakhanews`, config: `fra`)
-- **License**: Not specified in dataset metadata (empty field)
+- **License**: Not specified in dataset metadata (empty field). The Masakhane organization typically uses permissive licenses (MIT) but this must be verified on the Hugging Face dataset page before public release.
 - **Provenance**: Files downloaded via script `download.py` using `datasets.load_dataset("masakhane/masakhanews", "fra")`, then saved as CSV files (`masakhanews_fr_train.csv`, `masakhanews_fr_validation.csv`, `masakhanews_fr_test.csv`).
+- **Limit stated**: Articles are in French but not specifically Burkina Faso news. They cover multiple African countries.
 
 ## 2. Dataset Structure
 ### 2.1 Columns
@@ -76,14 +77,15 @@ Name: count, dtype: int64
 - No empty `text` or `headline` values after stripping whitespace (`""` or whitespace-only) in any split.
 
 ### 4.3 Duplicates
-- **Exact duplicates (all columns) in train**: 2 rows (indices 914 and 1427) - identical content across all columns
+- **Exact duplicates (all columns) in train**: 1 row to drop (index 1427 is an exact duplicate of index 914, same label=business, same headline, same url, same text).
 - **Shared texts between splits**:
-  - train ∩ test: 1 article (health in train → business in test, index 209 in train, 53 in test)
-  - validation ∩ test: 1 article (business in validation → health in test, index 129 in validation, 156 in test)
-  - train ∩ validation: 0 shared texts
+  - train ∩ test: 1 article (labels differ: health vs business — both share same text). Removed from ALL splits. Indices: train[209], test[53].
+  - validation ∩ test: 1 article (labels differ: business vs health — both share same text). Removed from val+test. Indices: val[129], test[156].
+  - train ∩ validation: 0 shared texts.
+- **Intra-train conflicts**: 2 articles with identical text but DIFFERENT labels (both labels reference the same body text, e.g. row 933 labeled business shares text with row 1096 labeled health). Removed from train only. Indices: train[933], train[1096].
 
-### 4.4 Text Length Statistics (words)
-#### Train split
+### 4.4 Text Length Statistics (words) — after cleaning
+#### Train split (1,472 rows after deduplication + conflict removal)
 - min: 12
 - median: 717.5
 - mean: 818.4
@@ -91,7 +93,7 @@ Name: count, dtype: int64
 - 95th percentile: 1948.8
 - max: 7807
 
-#### Validation split
+#### Validation split (210 rows)
 - min: 1
 - median: 662.0
 - mean: 766.9
@@ -99,7 +101,7 @@ Name: count, dtype: int64
 - 95th percentile: 2021.5
 - max: 3474
 
-#### Test split
+#### Test split (420 rows)
 - min: 35
 - median: 674.5
 - mean: 827.6
@@ -108,17 +110,16 @@ Name: count, dtype: int64
 - max: 4092
 
 ## 5. Dataset Limitations
-1. **Class imbalance**: The `technology` class is under-represented (76 train, 11 val, 22 test) compared to other classes (350 train, 50 val, 100 test).
-2. **Class mismatch**: The dataset contains 5 classes, but the project requires 5 classes (business, health, politics, sports, technology). All classes are relevant except that `technology` should be excluded from training/validation/test splits as it's not part of the 4 target categories.
-3. **Data leakage**: One article appears in both train and test splits (different labels), indicating potential leakage. This must be resolved by removing the overlapping row(s) before training.
-4. **License**: Not specified in dataset metadata (empty field). The Masakhane organization typically uses permissive licenses, but verification is needed before public release.
+1. **Class imbalance**: The `technology` class is under-represented (76 train, 11 val, 22 test) compared to other classes (350 train, 50 val, 100 test). This will affect model performance on this class.
+2. **Data leakage**: One article appears in both train and test splits with DIFFERENT labels (leaks a wrong label into test evaluation). Resolved by removal before training. Same for val∩test. Intra-train conflicts also resolved.
+3. **Language**: Articles are in French but not specifically Burkina Faso news. Further filtering may be needed for a pure burkinabè focus.
+4. **License**: Not specified in dataset metadata (empty field). Must verify on Hugging Face page before public release.
 
 ## 6. Recommended Next Actions
-1. **Exclude `technology` class** from all splits (train, validation, test) to align with project requirements.
-2. **Remove duplicate rows** between train and test (1 article) and between validation and test (1 article) to prevent data leakage.
-3. **Re-split the dataset** after exclusions to maintain proper class distribution across the 5 classes.
-4. **Document the final class mapping** and ensure all preprocessing steps respect the class structure.
-5. **Verify license** on the Hugging Face dataset page to confirm usage permissions for educational purposes.
+1. **Keep all 5 classes** as project requires (no deletion requested).
+2. **Clean splits** using the documented rules (exact dups, shared-text conflicts, intra-train conflicts) — already implemented in `src/data.py`.
+3. **Verify license** on the Hugging Face dataset page.
+4. Proceed to Phase 2 of implementation: tokenization and vocabulary building.
 
 ---
 

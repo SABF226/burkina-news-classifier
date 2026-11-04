@@ -1,2 +1,6 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
 docs/
 .venv/

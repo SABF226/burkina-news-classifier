@@ -37,11 +37,13 @@ def load_splits(data_dir: str = "datasets", seed: int = SEED) -> Tuple[pd.DataFr
         - label: numeric label index (0-4)
         - label_name: string label name
 
-    Cleaning rules applied:
-    1. Remove exact duplicate rows within train (keep first occurrence).
-    2. Remove articles shared between splits with different labels (from ALL splits).
-    3. Remove articles shared between splits with same label (from val/test only,
-       keep in train).
+    Cleaning rules applied (in order, first wins):
+    1. Drop exact duplicate rows (all columns identical) within train; keep first occurrence.
+    2. For every text appearing >1 occurrence:
+         a. If labels differ across occurrences → remove from ALL splits (train + others).
+            This catches cross-split leakage AND intra-train conflicts.
+         b. If labels are SAME across all occurrences → remove only from val/test, keep in train.
+    3. Final verification: no text overlap between any two splits; 5 classes everywhere.
     4. Log line counts before and after cleaning.
     """
 
@@ -145,14 +147,14 @@ def load_splits(data_dir: str = "datasets", seed: int = SEED) -> Tuple[pd.DataFr
 
     _log_counts("Final -> ", {"train": train_df, "val": val_df, "test": test_df})
 
-    # ── Log summary ──
+    # ── Log summary with detailed removals ──
     logger.info("=" * 50)
-    logger.info("DATA LOAD SUMMARY")
+    logger.info("DATA LOAD SUMMARY — REMOVAL BREAKDOWN")
     logger.info("=" * 50)
-    logger.info(f"Original counts -> train: {original_counts['train']}, val: {original_counts['val']}, test: {original_counts['test']}")
-    logger.info(f"Final counts   -> train: {final_counts['train']}, val: {final_counts['val']}, test: {final_counts['test']}")
-    logger.info(f"Texts removed due to duplication: train internal dups = {train_dups}")
-    logger.info(f"Shared-text removals -> train: {len(removals_by_split['train'])}, val: {len(removals_by_split['val'])}, test: {len(removals_by_split['test'])}")
+    logger.info(f"Original counts  -> train: {original_counts['train']}, val: {original_counts['val']}, test: {original_counts['test']}")
+    logger.info(f"Final counts     -> train: {final_counts['train']}, val: {final_counts['val']}, test: {final_counts['test']}")
+    logger.info(f"Rule 1 (internal dups) removed from train: {train_dups}")
+    logger.info(f"Rule 2 (diff labels, all splits) removed -> train: {len(removals_by_split['train'])}, val: {len(removals_by_split['val'])}, test: {len(removals_by_split['test'])}")
     logger.info("=" * 50)
 
     # Rename label_name -> label (numeric) and keep label_name for reference
