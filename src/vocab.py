@@ -5,6 +5,7 @@ Responsible: Team Member 1 (Dataset Research & Data Preparation)
 
 import json
 import logging
+import re
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
@@ -18,34 +19,19 @@ UNK_TOKEN = "<UNK>"   # reserved index 1
 def tokenize(text: str) -> List[str]:
     """Tokenize a French article into a list of tokens.
 
-    Rules:
-    - Convert to lowercase.
-    - Split on whitespace while preserving accented characters (they stay as-is).
-    - Punctuation characters are separated out as individual tokens so that
-      each word and each punctuation mark contributes to the embedding pool
-      separately. This helps the model learn how punctuation modifies meaning
-      at the token level.
+    Words keep internal apostrophes and hyphens (for example, ``l'assaut``).
+    Other punctuation marks are returned as individual tokens. Accents are
+    preserved and curly apostrophes are normalized to straight apostrophes.
 
     Example:
         "L'Ouganda à l'assaut des ""fimbu"" de la RDC"
         -> ["l'ouguanda", "à", "l'", "assaut", "des", ""fimbu"", "de", "la", "rdc"]
     """
-    # Normalise whitespace: collapse multiple spaces, strip ends
-    import re
-    text = re.sub(r"\s+", " ", text.strip()).lower()
-
-    # Separate punctuation: insert spaces around punctuation boundaries
-    # This produces clean tokens where each punctuation is its own element.
-    tokens: List[str] = []
-    for match in re.finditer(r"[^\w'-]+", text):
-        tokens.append(match.group())
-    # Fallback: leftover alphanumeric pieces handled by remaining words after split
-    rest = re.sub(r"[^\w'-]+", " ", text).split()
-    for w in rest:
-        if w not in tokens:
-            tokens.append(w)
-
-    return tokens
+    text = text.lower().replace("’", "'")
+    # ``\w`` is Unicode-aware in Python, so French accented letters stay
+    # inside words. The alternative matches each punctuation mark separately.
+    token_pattern = r"\w+(?:['-]\w+)*|[^\w\s]"
+    return re.findall(token_pattern, text, flags=re.UNICODE)
 
 
 class Vocab:
@@ -57,6 +43,9 @@ class Vocab:
         self.pad_token = pad_token
         self.unk_token = unk_token
         self.max_words = max_words
+        if min_freq < 1:
+            raise ValueError("min_freq must be at least 1")
+        self.min_freq = min_freq
 
         self.token2id: Dict[str, int] = {}
         self.id2token: Dict[int, str] = {}
@@ -94,8 +83,14 @@ class Vocab:
 
         # Second pass: reserve indices for high-frequency tokens, keeping
         # alphabetical order as a deterministic tie-breaker.
+        freq = {
+            token: count
+            for token, count in freq.items()
+            if count >= self.min_freq
+        }
+
         for rank, (tok, count) in enumerate(sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))):
-            idx = len(self.token2id) + 2  # +2 because 0 and 1 are reserved
+            idx = len(self.token2id) #cette ligne permet de récupérer l'index du token en cours d'ajout à la vocabulaire
             if idx < 2:
                 raise RuntimeError("Vocabulary exhausted without reserved indices")
             self.token2id[tok] = idx
