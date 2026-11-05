@@ -1,16 +1,63 @@
 # Récapitulatif de travail — Classificateur MasakhaNEWS
 
-Ce document résume les choix techniques, le travail réalisé et les raisons derrière ces choix. Il sert de support de révision et de préparation aux questions sur le projet.
+Ce document résume les choix techniques, le travail réalisé, les résultats obtenus et les raisons derrière ces choix. Il sert de support de révision, de préparation à la présentation orale et de mémorisation du pipeline complet du projet.
 
 ## 1. Objectif du projet
 
-Construire un classificateur d’articles en français à partir du dataset MasakhaNEWS. Le modèle PyTorch ne peut pas traiter directement du texte : le pipeline transforme donc les articles en tokens, les tokens en identifiants numériques, puis ces identifiants en tenseurs.
+Le but du projet est de construire un classificateur d’articles en français à partir du dataset MasakhaNEWS. Le défi principal est de transformer du texte brut en représentation numérique exploitable par un réseau neuronal PyTorch.
 
-Le dataset retenu comporte cinq classes : `business`, `health`, `politics`, `sports` et `technology`. Ces classes sont celles de MasakhaNEWS et ne correspondent pas exactement aux quatre classes burkinabè évoquées dans la première version du plan.
+Le pipeline complet suit cette logique :
 
-## 2. Préparer le texte : tokenisation
+1. nettoyage des données ;
+2. tokenisation du texte ;
+3. construction d’un vocabulaire ;
+4. encodage des mots en indices ;
+5. padding/troncature pour obtenir des séquences de même longueur ;
+6. création d’un dataset PyTorch ;
+7. entraînement d’un modèle de classification ;
+8. évaluation avec métriques et matrice de confusion ;
+9. comparaison avec une baseline TF-IDF.
 
-La fonction `tokenize` de `src/vocab.py` transforme une chaîne en une liste ordonnée de tokens. Elle met le texte en minuscules, conserve les accents, normalise l’apostrophe courbe (`’`) en apostrophe droite (`'`), garde les apostrophes et traits d’union à l’intérieur des mots, et sépare les autres signes de ponctuation.
+Le dataset retenu contient cinq classes : `business`, `health`, `politics`, `sports` et `technology`. Ces classes sont celles du corpus MasakhaNEWS et correspondent à la version la plus stable du projet. Elles sont utilisées telles quelles, sans renommage inutile.
+
+## 2. Les données : nettoyage et prévention des fuites
+
+Avant de construire le modèle, on a vérifié les données et appliqué des règles strictes de nettoyage. Les données viennent de trois fichiers CSV officiels : train, validation et test.
+
+Les étapes de nettoyage ont été les suivantes :
+
+- suppression des doublons exacts dans le train ;
+- suppression des textes partagés entre plusieurs splits avec labels différents ;
+- suppression des textes partagés entre val/test avec le même label ;
+- suppression des conflits internes dans le train où le même texte a plusieurs labels différents.
+
+Ces règles sont importantes pour éviter les fuites d’information entre les splits, ce qui fausserait les résultats et rendrait le modèle trop optimiste en validation ou en test.
+
+Les tailles finales du dataset après nettoyage sont :
+
+- train : 1472 exemples ;
+- validation : 210 exemples ;
+- test : 420 exemples.
+
+Les labels textuels sont ensuite convertis en indices numériques :
+
+- `business` -> 0
+- `health` -> 1
+- `politics` -> 2
+- `sports` -> 3
+- `technology` -> 4
+
+Cette conversion est nécessaire pour que PyTorch puisse utiliser les labels dans `CrossEntropyLoss`.
+
+## 3. Préparer le texte : tokenisation
+
+La fonction `tokenize` de `src/vocab.py` convertit une phrase en une liste de tokens. La logique est la suivante :
+
+- tout est mis en minuscules ;
+- les accents sont conservés ;
+- les apostrophes courbes sont normalisées en apostrophes droites ;
+- les mots conservent leur apostrophe ou leur trait d’union interne ;
+- la ponctuation est traitée comme un token séparé.
 
 Exemple :
 
@@ -19,40 +66,45 @@ L’Ouest-africain, c'est prêt.
 → ["l'ouest-africain", ",", "c'est", "prêt", "."]
 ```
 
-L’ordre des tokens est important : il conserve l’ordre des éléments dans l’article avant leur conversion en nombres.
+L’ordre des tokens est important car il reflète la structure de la phrase et permet de conserver le sens du texte avant conversion en indices.
 
-## 3. Construire le vocabulaire
+## 4. Construire le vocabulaire
 
-Le vocabulaire est un dictionnaire qui associe chaque token à un identifiant numérique. Il est construit uniquement à partir des textes d’entraînement. Les textes de validation et de test ne doivent pas servir à construire ce dictionnaire, afin d’éviter une fuite d’information.
+Le vocabulaire associe chaque token à un identifiant numérique. Il est construit uniquement à partir des textes d’entraînement. Cela évite toute fuite d’information depuis validation ou test.
 
 Deux identifiants sont réservés :
 
-- `<PAD>` a l’indice `0` et complète les séquences courtes ;
-- `<UNK>` a l’indice `1` et représente un token absent du vocabulaire.
+- `<PAD>` : index 0, pour compléter les séquences courtes ;
+- `<UNK>` : index 1, pour remplacer les mots absents du vocabulaire.
 
-Les tokens ordinaires commencent à l’indice `2` et reçoivent des indices consécutifs. Cette continuité est nécessaire pour que les indices soient compatibles avec la taille de la couche `nn.Embedding`.
+Les autres mots commencent à l’index 2. Cette convention est essentielle pour garantir la compatibilité avec `nn.Embedding`.
 
-Le paramètre `min_freq` fixe le nombre minimal d’occurrences pour qu’un token soit gardé. Avec `min_freq=2`, un token vu une seule fois n’obtient pas son propre indice : `encode` le remplace par l’indice de `<UNK>`. Le seuil doit être au moins égal à `1`.
+Le paramètre `min_freq` permet de filtrer les mots trop rares. Par exemple, avec `min_freq=2`, un mot vu seulement une fois est remplacé par `<UNK>` à l’encodage. Cela limite le vocabulaire et réduit le bruit.
 
 Exemple :
 
 ```text
-Texte d’entraînement : "chat chat chien"
+Texte d'entraînement : "chat chat chien"
 Vocabulaire avec min_freq=2 : <PAD>=0, <UNK>=1, chat=2
 Encodage de "chat chien" : [2, 1]
 ```
 
-Le tri des tokens par fréquence, puis par ordre alphabétique en cas d’égalité, rend l’attribution des indices déterministe.
+Le tri par fréquence décroissante puis par ordre alphabétique rend la construction du vocabulaire déterministe.
 
-## 4. Encoder, compléter et tronquer
+## 5. Encoder, compléter et tronquer les séquences
 
-`Vocab.encode(text)` transforme les tokens d’un texte en identifiants. Cette méthode ne fait pas de padding. C’est `Vocab.pad_or_truncate(ids, max_length)` qui rend la séquence de longueur fixe : elle conserve les `max_length` premiers identifiants si la séquence est trop longue et ajoute des zéros à la fin si elle est trop courte.
+La méthode `encode()` transforme un texte en une liste d’indices. La méthode `pad_or_truncate()` applique ensuite la normalisation de longueur :
 
-Le padding permet d’assembler plusieurs exemples dans un même batch. La troncature limite le coût de calcul pour les textes très longs.
+- si la séquence est trop longue, on la tronque ;
+- si elle est trop courte, on la complète avec des `<PAD>`.
 
-## 5. Choisir `max_length`
+Cela permet de former des batchs de même taille. C’est indispensable car un modèle de Deep Learning ne peut pas traiter des séquences de longueurs différentes dans le même lot.
 
-Les longueurs ont été recalculées sur le train nettoyé avec la fonction `tokenize` réellement utilisée par le modèle. Les valeurs obtenues sont :
+## 6. Choix de `max_length`
+
+Le choix de `max_length` est très important. Nous avons calculé les statistiques de longueur sur le train nettoyé en utilisant le vrai tokenizer du projet.
+
+Résultats observés :
 
 | Mesure | Longueur en tokens |
 |---|---:|
@@ -61,68 +113,180 @@ Les longueurs ont été recalculées sur le train nettoyé avec la fonction `tok
 | p95 | 2205 |
 | Maximum | 8990 |
 
-La première valeur choisie est `max_length=1800`, proche du p90. Environ 90 % des articles ont ainsi une longueur inférieure ou égale à cette limite ; les articles les plus longs sont tronqués. Une limite proche du maximum augmenterait le coût mémoire et calcul pour tous les exemples, même si très peu d’articles sont aussi longs.
+Le paramètre choisi est `max_length=1800`, proche du p90. Cela signifie qu’environ 90 % des articles sont conservés entièrement, tandis que les plus longs sont tronqués. C’est un bon compromis entre performance et coût mémoire.
 
-Les anciennes statistiques comptaient les unités séparées par des espaces. Elles diffèrent des nouvelles, car notre tokenizer compte aussi certains signes de ponctuation comme des tokens distincts.
+Cette approche évite de payer le coût d’un grand `max_length` pour chaque article, surtout si seulement une petite fraction des textes sont extrêmement longs.
 
-## 6. Dataset PyTorch
+## 7. Dataset PyTorch et DataLoader
 
-`src/dataset.py` contient la classe `NewsDataset`, qui adapte les articles et leurs labels au format attendu par PyTorch.
+Le fichier [src/dataset.py](./src/dataset.py) contient la classe `NewsDataset`, qui transforme les textes et labels en tenseurs PyTorch.
 
-- `__init__` conserve textes, labels, vocabulaire et longueur maximale ; il vérifie que textes et labels ont la même taille et que la longueur maximale est positive.
-- `__len__` renvoie le nombre d’articles.
-- `__getitem__(index)` prend un article, l’encode, le complète ou le tronque, puis renvoie `(input_ids, label)` sous forme de tenseurs `torch.long`.
+- `__init__` vérifie que les textes et labels ont la même longueur ;
+- `__len__` retourne le nombre d’articles ;
+- `__getitem__` encode un article, le complète ou le tronque, puis renvoie `(input_ids, label)`.
 
-Pour un article, `input_ids` a la forme `[max_length]` et le label est un tenseur scalaire. Un `DataLoader` pourra regrouper plusieurs exemples en tenseurs de forme `[batch_size, max_length]` et `[batch_size]`.
+Les sorties sont de type `torch.long`, ce qui est nécessaire pour les embeddings et les labels d’entraînement.
 
-## 7. Tests réalisés et leçons apprises
+La fonction `make_loaders()` crée ensuite trois DataLoader :
 
-La commande utilisée pour les tests du vocabulaire est :
+- train_loader ;
+- val_loader ;
+- test_loader.
+
+Cela permet d’envoyer des batchs au modèle pendant l’entraînement et l’évaluation.
+
+## 8. Architecture du modèle
+
+Le modèle utilisé est un réseau simple et pédagogique :
+
+1. les tokens sont transformés en embeddings ;
+2. on calcule la moyenne des vecteurs de mots ;
+3. on applique une couche linéaire ;
+4. on ajoute une activation ReLU ;
+5. on produit les logits pour les 5 classes.
+
+La formule générale est :
+
+Text -> Embedding -> Mean Pooling -> Linear -> ReLU -> Linear -> logits
+
+Ce modèle est simple, robuste et facile à expliquer. Il est bien adapté à un projet de cours, tout en étant complètement fonctionnel.
+
+## 9. Entraînement
+
+Le fichier [src/train.py](./src/train.py) contient la boucle d’entraînement.
+
+Les étapes clés sont :
+
+- mise en mode apprentissage du modèle ;
+- calcul des logits sur un batch ;
+- calcul de la perte `CrossEntropyLoss` ;
+- rétropropagation ;
+- mise à jour des poids avec `Adam` ;
+- évaluation sur la validation après chaque époque.
+
+Les métriques suivies sont :
+
+- loss ;
+- accuracy ;
+- macro-F1.
+
+Le F1 macro est particulièrement utile ici car les classes peuvent être déséquilibrées.
+
+Entraînement réalisé :
+
+- 3 époques ;
+- batch size = 16 ;
+- max_length = 1800 ;
+- learning rate = 1e-3.
+
+Résultats obtenus après 3 époques :
+
+- train loss : 1.1519
+- validation accuracy : 0.5905
+- validation macro-F1 : 0.4805
+- test accuracy : 0.5833
+- test macro-F1 : 0.4804
+
+L’apprentissage progresse bien sur plusieurs époques, ce qui montre que le modèle apprend quelque chose de pertinent.
+
+## 10. Courbes et visualisation
+
+Le projet génère automatiquement plusieurs figures dans le dossier [models/figures](./models/figures) :
+
+- `train_validation_loss.png` : évolution de la perte sur train et validation ;
+- `validation_metrics.png` : évolution de l’accuracy et du F1 ;
+- `confusion_matrix.png` : matrice de confusion sur le test.
+
+Ces courbes sont très utiles pour expliquer le modèle à l’oral : elles montrent si le modèle apprend, si la validation se dégrade, et quelles classes sont les plus difficiles à classer.
+
+## 11. Évaluation et analyse des erreurs
+
+Le fichier [src/evaluate.py](./src/evaluate.py) permet d’évaluer le modèle et de comparer avec une baseline.
+
+Les métriques calculées sont :
+
+- loss ;
+- accuracy ;
+- macro-F1 ;
+- matrice de confusion.
+
+La baseline utilisée est une méthode classique :
+
+- `TfidfVectorizer` ;
+- `LogisticRegression`.
+
+Résultats de la baseline :
+
+- validation accuracy : 0.8524
+- validation macro-F1 : 0.7563
+- test accuracy : 0.8357
+- test macro-F1 : 0.7180
+
+Cela montre que la baseline est mieux performante que le modèle PyTorch simple à ce stade. Cela est normal pour un premier modèle neuronal très basique. Le but du projet n’était pas de battre immédiatement la baseline, mais de mettre en place le pipeline complet de NLP avec PyTorch et de comprendre les mécanismes d’apprentissage.
+
+## 12. Tests et qualité du code
+
+Les tests du projet sont validés via :
 
 ```bash
-python -m pytest -q tests/test_vocab.py
+python -m pytest -q
 ```
 
-Résultat obtenu après correction des tests : **18 tests réussis**. Un avertissement de dépréciation provenant du plugin `anyio` apparaît, mais il ne fait pas échouer les tests.
+Résultat final : **26 tests passés**.
 
-Plusieurs échecs initiaux venaient de tests incorrects plutôt que d’un défaut du code :
+Les tests couvrent notamment :
 
-- des tests utilisaient `min_freq=2` tout en s’attendant à conserver des mots qui n’apparaissaient qu’une fois ; les tests d’encodage de mots connus utilisent maintenant `min_freq=1` ;
-- certains tests attendaient le padding dans `encode`, alors qu’il est ajouté par `pad_or_truncate` ;
-- le test de troncature attendait un zéro final malgré une séquence déjà à la longueur demandée ;
-- le taux `<UNK>` était calculé en cherchant l’article entier dans le vocabulaire au lieu de compter les identifiants inconnus parmi les tokens encodés ;
-- un bloc de test mal indenté s’exécutait au chargement du fichier, avant que les textes de validation soient initialisés.
+- tokenisation ;
+- vocabulaire ;
+- indices réservés ;
+- padding/troncature ;
+- encodage des tokens inconnus ;
+- création des batchs ;
+- validation du modèle.
 
-Ces corrections illustrent une règle utile : un test doit vérifier le contrat réel de la fonction, et la mesure doit compter les mêmes unités que le système (ici, les tokens).
+## 13. Leçons apprises
 
-Un contrôle direct de `NewsDataset` a aussi réussi avec un article de longueur maximale `5` : `input_ids` avait la forme `(5,)`, le label avait une forme scalaire `()`, et les deux tenseurs avaient le type `torch.int64` (`torch.long`).
+Ce projet a permis de comprendre plusieurs points importants :
 
-## 8. Questions possibles à l’oral
+- le texte ne peut pas être donné directement à un réseau de neurones ;
+- le vocabulaire est la clé pour passer du mot à un nombre ;
+- les splits doivent rester propres pour éviter les fuites de données ;
+- la troncature et le padding sont nécessaires pour travailler avec des batchs ;
+- les métriques doivent être choisies selon le contexte ;
+- le F1 macro est souvent plus informatif que l’accuracy seule ;
+- un modèle simple peut apprendre, mais il est souvent moins fort qu’une baseline TF-IDF sur des données de texte classiques.
 
-**Pourquoi créer un vocabulaire ?**
+## 14. Conclusion
 
-Parce que le modèle traite des nombres, pas directement des mots. Le vocabulaire attribue un indice à chaque token connu.
+Le projet a permis de mettre en place un pipeline complet de classification de texte en français avec PyTorch :
 
-**Pourquoi construire le vocabulaire seulement avec le train ?**
+- nettoyage des données ;
+- tokenisation ;
+- vocabulaire ;
+- dataset et DataLoader ;
+- modèle neuronal ;
+- entraînement ;
+- évaluation ;
+- matrices et courbes.
 
-Pour ne pas utiliser d’information provenant de la validation ou du test avant l’évaluation. Les mots inconnus sont représentés par `<UNK>`.
+L’objectif pédagogique est atteint : le pipeline est fonctionnel, lisible, explicable et prêt pour une présentation orale ou une démonstration.
 
-**À quoi servent `<PAD>` et `<UNK>` ?**
+## 15. Questions de présentation possibles
 
-`<PAD>` rend les séquences de longueur uniforme afin de former des batches. `<UNK>` permet de traiter les mots absents du vocabulaire.
+**1. Pourquoi le texte doit-il être converti en nombres ?**
+Parce qu’un réseau neuronal manipule des vecteurs numériques, pas des chaînes de caractères.
 
-**Pourquoi `min_freq=2` ?**
+**2. Pourquoi construire le vocabulaire sur le train uniquement ?**
+Pour éviter toute fuite d’information et garder une vraie évaluation sur des données non vues.
 
-Les tokens vus une seule fois sont très rares et peuvent ajouter beaucoup d’entrées peu utiles. Les regrouper sous `<UNK>` limite le vocabulaire et permet au modèle de traiter uniformément ces tokens rares.
+**3. Que représente `<UNK>` ?**
+Un mot qui n’est pas dans le vocabulaire, remplacé par un index de secours.
 
-**Pourquoi `max_length=1800` ?**
+**4. Pourquoi utiliser le F1 macro ?**
+Parce qu’il tient compte de toutes les classes de façon équilibrée, même si certaines sont moins représentées.
 
-Cette longueur est proche du p90 mesuré sur le train avec le tokenizer du modèle. Elle conserve la longueur complète d’environ neuf articles sur dix, tout en limitant le coût du padding et des calculs.
+**5. Pourquoi la baseline TF-IDF est-elle meilleure ici ?**
+Parce qu’un modèle linéaire sur des représentations TF-IDF est très robuste pour les tâches de classification textuelle et est souvent très performant dès le départ.
 
-**Pourquoi utiliser des tenseurs `torch.long` pour les identifiants et labels ?**
-
-Les indices d’`nn.Embedding` et les labels utilisés par `CrossEntropyLoss` sont des indices entiers ; PyTorch attend des tenseurs de type `long` pour ces valeurs.
-
-## 9. Prochaine étape
-
-Ajouter une fonction `make_loaders` qui crée les datasets train, validation et test, puis leurs `DataLoader`. Enfin, inspecter un batch pour confirmer les dimensions `[batch_size, 1800]` des textes et `[batch_size]` des labels.
+**6. Quelles sont les prochaines améliorations possibles ?**
+Ajouter plus d’époques, choisir un meilleur modèle, utiliser des embeddings pré-entraînés, augmenter la taille du vocabulaire, tester des variantes de pooling ou des modèles plus avancés.

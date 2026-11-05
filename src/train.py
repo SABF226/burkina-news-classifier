@@ -1,4 +1,25 @@
-"""Training loop for the Burkina News text classifier."""
+"""Training loop for the Burkina News text classifier.
+
+Avant l'entraînement
+-------------------
+- On charge les données nettoyées et on construit un vocabulaire sur le split
+  train uniquement.
+- On transforme chaque article en séquences d'indices numériques.
+- On crée des DataLoaders pour envoyer les batchs au modèle.
+
+Pendant l'entraînement
+----------------------
+- Le modèle calcule des logits sur chaque batch.
+- La fonction de perte CrossEntropyLoss compare ces logits aux vraies classes.
+- L'optimiseur Adam met à jour les poids du modèle.
+
+Après l'entraînement
+--------------------
+- On évalue le modèle sur la validation puis le test.
+- On sauvegarde le meilleur état du modèle + historique des métriques.
+- On produit aussi des courbes visuelles pour suivre l'évolution de la perte et
+  des scores.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +27,9 @@ import argparse
 import json
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from sklearn.metrics import accuracy_score, f1_score
@@ -34,8 +58,42 @@ def set_seed(seed: int = 42) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def save_training_plots(history: dict, save_dir: Path) -> None:
+    """Generate simple training curves to visualize the optimization process."""
+    fig_dir = save_dir / "figures"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+
+    epochs = list(range(1, len(history["train_loss"]) + 1))
+
+    plt.figure(figsize=(10, 4))
+    plt.plot(epochs, history["train_loss"], label="train loss", marker="o")
+    plt.plot(epochs, history["val_loss"], label="validation loss", marker="s")
+    plt.title("Loss over epochs")
+    plt.xlabel("Epoch")
+    plt.ylabel("Cross-entropy loss")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(fig_dir / "train_validation_loss.png", dpi=200)
+    plt.close()
+
+    plt.figure(figsize=(10, 4))
+    plt.plot(epochs, history["val_acc"], label="validation accuracy", marker="o")
+    plt.plot(epochs, history["val_f1"], label="validation macro-F1", marker="s")
+    plt.title("Validation metrics over epochs")
+    plt.xlabel("Epoch")
+    plt.ylabel("Score")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(fig_dir / "validation_metrics.png", dpi=200)
+    plt.close()
+
+
 def evaluate(model: nn.Module, loader, device: torch.device):
     """Compute loss, accuracy and macro-F1 for a validation/test loader."""
+    # On passe le modèle en mode évaluation : les couches de dropout/batchnorm
+    # ne calculent plus de mises à jour stochastiques.
     model.eval()
     criterion = nn.CrossEntropyLoss()
     total_loss = 0.0
@@ -61,6 +119,8 @@ def evaluate(model: nn.Module, loader, device: torch.device):
 
 def train_one_epoch(model: nn.Module, loader, optimizer, device: torch.device):
     """Run one training epoch and return the mean loss."""
+    # On repasse le modèle en mode entraînement pour autoriser les calculs de
+    # gradient et les couches sensibles à l'apprentissage.
     model.train()
     criterion = nn.CrossEntropyLoss()
     total_loss = 0.0
@@ -69,10 +129,15 @@ def train_one_epoch(model: nn.Module, loader, optimizer, device: torch.device):
         inputs = inputs.to(device)
         labels = labels.to(device)
 
+        # 1) remise à zéro des gradients précédents
         optimizer.zero_grad()
+        # 2) forward pass : le modèle produit des logits pour chaque classe
         logits = model(inputs)
+        # 3) calcul de la perte
         loss = criterion(logits, labels)
+        # 4) rétropropagation : calcul des gradients
         loss.backward()
+        # 5) mise à jour des poids par Adam
         optimizer.step()
         total_loss += loss.item() * labels.size(0)
 
@@ -112,10 +177,14 @@ def main() -> None:
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
+    # On conserve l'historique de la courbe d'apprentissage pour pouvoir visualiser
+    # l'évolution sur les époques et vérifier si le modèle apprend ou surapprend.
     history = {"train_loss": [], "val_loss": [], "val_acc": [], "val_f1": [], "test_loss": [], "test_acc": [], "test_f1": []}
 
     for epoch in range(1, args.epochs + 1):
+        # Une époque = un passage complet sur tout le dataset d'entraînement.
         train_loss = train_one_epoch(model, train_loader, optimizer, device)
+        # Evaluation régulière sur la validation pour surveiller la généralisation.
         val_loss, val_acc, val_f1 = evaluate(model, val_loader, device)
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
@@ -124,6 +193,8 @@ def main() -> None:
 
         print(f"Epoch {epoch}/{args.epochs} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | val_acc={val_acc:.4f} | val_f1={val_f1:.4f}")
 
+    # Le test est utilisé seulement en fin d'entraînement pour mesurer la
+    # performance réelle dans des données jamais vues.
     test_loss, test_acc, test_f1 = evaluate(model, test_loader, device)
     history["test_loss"].append(test_loss)
     history["test_acc"].append(test_acc)
@@ -148,10 +219,14 @@ def main() -> None:
     with open(save_dir / "train_history.json", "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
 
+    # On sauvegarde aussi le vocabulaire pour qu'une future inférence utilise les
+    # mêmes index et le même mapping que lors de l'entraînement.
     vocab.save(str(save_dir / "vocab.json"))
+    save_training_plots(history, save_dir)
 
     print(f"\nFinal test metrics | loss={test_loss:.4f} | acc={test_acc:.4f} | macro_f1={test_f1:.4f}")
     print(f"Saved model to {save_dir / 'classifier.pt'}")
+    print(f"Saved plots to {save_dir / 'figures'}")
 
 
 if __name__ == "__main__":

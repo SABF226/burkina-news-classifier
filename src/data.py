@@ -12,6 +12,17 @@ from typing import Tuple, List
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Avant l'entraînement : gestion des données
+# ---------------------------------------------------------------------------
+# 1) On charge les CSV déjà préparés pour les splits train / validation / test.
+# 2) On applique des règles de nettoyage strictes pour éviter les fuites de
+#    données entre les partitions : doublons, textes partagés entre splits,
+#    labels contradictoires, etc.
+# 3) On convertit les labels textuels (business, health, ...) en indices
+#    numériques propres à PyTorch (0, 1, 2, 3, 4).
+# ---------------------------------------------------------------------------
+
 # Fix random seeds for reproducibility
 SEED = 42
 np.random.seed(SEED)

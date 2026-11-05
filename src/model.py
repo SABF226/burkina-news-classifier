@@ -1,4 +1,13 @@
-"""A simple text classifier built from embeddings and mean pooling."""
+"""A simple text classifier built from embeddings and mean pooling.
+
+Ce modèle correspond à l'étape de préparation du texte vers les nombres puis vers
+la décision finale :
+1. Chaque token est converti en un vecteur dense via nn.Embedding.
+2. On moyenne les vecteurs de mots pour obtenir une représentation globale.
+3. Un petit MLP transforme cette représentation en scores de classes.
+
+C'est une architecture simple et pédagogique, souvent utilisée en NLP de base.
+"""
 
 from __future__ import annotations
 

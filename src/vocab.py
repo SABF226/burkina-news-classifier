@@ -11,6 +11,20 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Avant l'entraînement : tokenisation et vocabulaire
+# ---------------------------------------------------------------------------
+# Un texte brut ne peut pas être injecté directement dans un réseau neuronal.
+# Il faut d'abord :
+#   1) couper le texte en tokens (tokenize),
+#   2) construire un vocabulaire stable,
+#   3) convertir chaque token en index numérique,
+#   4) compléter ou tronquer les séquences pour obtenir une taille fixe.
+#
+# Cette étape est cruciale parce qu'elle conditionne la qualité du modèle et
+# évite aussi les fuites d'information entre les splits.
+# ---------------------------------------------------------------------------
+
 # Special tokens must be stable indices to avoid index drift between training and inference.
 PAD_TOKEN = "<PAD>"   # reserved index 0
 UNK_TOKEN = "<UNK>"   # reserved index 1

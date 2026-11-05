@@ -1,4 +1,14 @@
-"""Evaluation utilities for the text classifier."""
+"""Evaluation utilities for the text classifier.
+
+Après l'entraînement
+--------------------
+- On compare les prédictions du modèle aux vraies classes.
+- Accuracy = proportion de bons prédictions globales.
+- Macro-F1 = moyenne des F1 par classe, utile quand les classes sont
+  déséquilibrées.
+- La matrice de confusion montre précisément quels types d'erreurs sont faits.
+- La baseline TF-IDF sert de point de comparaison avec un modèle classique.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +16,9 @@ import argparse
 import json
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -20,8 +33,30 @@ except ImportError:  # pragma: no cover
     from model import MeanPoolTextClassifier
 
 
+def save_confusion_matrix(matrix: np.ndarray, save_dir: Path) -> None:
+    """Save a readable confusion matrix plot for the final evaluation."""
+    fig_dir = save_dir / "figures"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+
+    plt.figure(figsize=(8, 6))
+    plt.imshow(matrix, cmap="Blues")
+    plt.colorbar(label="Counts")
+    plt.xticks(range(matrix.shape[1]), [str(i) for i in range(matrix.shape[1])])
+    plt.yticks(range(matrix.shape[0]), [str(i) for i in range(matrix.shape[0])])
+    plt.title("Confusion matrix")
+    plt.xlabel("Predicted label")
+    plt.ylabel("True label")
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+            plt.text(j, i, int(matrix[i, j]), ha="center", va="center", color="black" if matrix[i, j] < matrix.max() / 2 else "white")
+    plt.tight_layout()
+    plt.savefig(fig_dir / "confusion_matrix.png", dpi=200)
+    plt.close()
+
+
 def evaluate_model(model: torch.nn.Module, loader, device: torch.device):
     """Return loss, accuracy and macro-F1 for a PyTorch model on a loader."""
+    # On évalue le modèle en mode inference, sans rétropropagation.
     model.eval()
     criterion = torch.nn.CrossEntropyLoss()
     losses = []
@@ -113,10 +148,15 @@ def main():
     test_loss, test_acc, test_f1 = evaluate_model(model, test_loader, device)
     matrix, _, _ = confusion_report(model, test_loader, device)
 
+    save_dir = Path("models")
+    save_dir.mkdir(parents=True, exist_ok=True)
+    save_confusion_matrix(matrix, save_dir)
+
     print(f"Validation  | loss={val_loss:.4f} | acc={val_acc:.4f} | macro_f1={val_f1:.4f}")
     print(f"Test        | loss={test_loss:.4f} | acc={test_acc:.4f} | macro_f1={test_f1:.4f}")
     print("Confusion matrix:")
     print(matrix)
+    print(f"Saved confusion matrix plot to {save_dir / 'figures' / 'confusion_matrix.png'}")
 
     train_df, val_df, test_df = __import__("data").load_splits(data_dir=args.data_dir)
     baseline = tfidf_baseline(
